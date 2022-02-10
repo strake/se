@@ -24,7 +24,8 @@ import Text.Regex.TDFA (Regex)
 import qualified Text.Regex.TDFA as Regex
 import Util
 
-import Process (readCreateProcess, shell)
+import Process (readCreateProcessLazy, shell)
+import qualified Process
 
 doProgram :: MonadFail m => Program -> m (Text -> IO Text)
 doProgram = go . programSource
@@ -48,7 +49,10 @@ doProgram = go . programSource
                   | Just (xs, ms, zs) <- Regex.matchOnceText re xs, (0, (ys, _)):_ <- Array.assocs ms =
                         [xs <> ys' <> zs' | ys' <- kont ys, zs' <- go zs]
                   | otherwise = pure xs ]
-        '|':pxs -> pure $ readCreateProcess (shell pxs) >=> \ case
+        '|':pxs -> pure $ readCreateProcessLazy (shell pxs)
+            { Process.std_in = Process.CreatePipe
+            , Process.std_out = Process.CreatePipe
+            , Process.std_err = Process.Inherit } >=> \ case
             (ExitSuccess, xs, _ :: Text) -> pure xs
             (e, _, _) -> throwIO e
         pxs -> fail ("Failed to parse program: " ++ show pxs)
