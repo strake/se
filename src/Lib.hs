@@ -10,13 +10,13 @@ import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.State (StateT (..))
 import Data.Array (Array)
 import qualified Data.Array as Array
+import Data.ByteString.Lazy (ByteString)
+import qualified Data.ByteString.Lazy.Char8 as BS (putStrLn)
+import qualified Data.ByteString.Lazy.UTF8 as BS
 import Data.Char (isAlphaNum, isSpace)
 import qualified Data.Char.Properties.BidiBrackets as UC
 import Data.Ix (Ix)
 import Data.Maybe (listToMaybe)
-import Data.Text.Lazy (Text)
-import qualified Data.Text.Lazy as Text
-import qualified Data.Text.Lazy.IO as Text
 import Lens.Micro (set)
 import System.Exit (ExitCode (..))
 import Text.Regex.Base (makeRegexOptsM)
@@ -30,13 +30,13 @@ import qualified Process
 
 import Posited
 
-doProgram :: MonadFail m => Program -> m (Text -> IO Text)
+doProgram :: MonadFail m => Program -> m (ByteString -> IO ByteString)
 doProgram = fmap (\ f -> fmap unPosited . f . Posited 0) . go . programSource
   where
-    go :: MonadFail m => [Char] -> m (Posited Text -> IO (Posited Text))
+    go :: MonadFail m => [Char] -> m (Posited ByteString -> IO (Posited ByteString))
     go = dropWhile isSpace & \ case
         [] -> pure pure
-        'p':pxs -> (\ k xs -> liftIO (Text.putStrLn (unPosited xs)) *> k xs) <$> go pxs
+        'p':pxs -> (\ k xs -> liftIO (BS.putStrLn (unPosited xs)) *> k xs) <$> go pxs
         's':pxs@(d:_) | Nothing <- UC.paired d ->
           [ withResetPos go
           | ((re, ψ), _flags) <- runStateT ((,) <$> parseDelimitedRegex <*> parsePostdelimitedSubst d) pxs
@@ -64,7 +64,7 @@ doProgram = fmap (\ f -> fmap unPosited . f . Posited 0) . go . programSource
             { Process.std_in = Process.CreatePipe
             , Process.std_out = Process.CreatePipe
             , Process.std_err = Process.Inherit } >=> \ case
-            (ExitSuccess, xs, _ :: Text) -> pure xs
+            (ExitSuccess, xs, _ :: ByteString) -> pure xs
             (e, _, _) -> throwIO e
         pxs -> fail ("Failed to parse program: " ++ show pxs)
 
@@ -89,7 +89,7 @@ parseDelimitedRegex = do
           , Regex.lastStarGreedy = True
           } (Regex.ExecOption True)
 
-type Subst m = Array Int Text -> m Text
+type Subst m = Array Int ByteString -> m ByteString
 
 parsePostdelimitedSubst :: (MonadFail m, MonadFail n) => Char -> StateT [Char] m (Subst n)
 parsePostdelimitedSubst d = flip f <$> parseDelimitedHelper d d
@@ -101,7 +101,7 @@ parsePostdelimitedSubst d = flip f <$> parseDelimitedHelper d d
             '\\':xs
               | (n, xs):_ <- reads xs, Just ys <- yss !? n -> (ys <>) <$> go xs
               | otherwise -> fail ("Invalid backreference: " ++ show xs)
-            x:xs -> Text.cons x <$> go xs
+            x:xs -> (BS.fromString [x] <>) <$> go xs
 
 parseDelimitedHelper :: MonadFail m => Char -> Char -> StateT [Char] m [Char]
 parseDelimitedHelper dl dr = StateT (go "")

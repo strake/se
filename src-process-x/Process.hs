@@ -18,8 +18,8 @@ import System.IO hiding (hPutStr)
 import System.IO.Unsafe
 import System.Process (CreateProcess (..), StdStream (..), createProcess, proc, shell, terminateProcess, waitForProcess)
 import System.Process.Common (ListLikeProcessIO (..), ProcessResult (..))
-import System.Process.Text ()
-import System.Process.Text.Lazy ()
+import System.Process.ByteString ()
+import System.Process.ByteString.Lazy ()
 
 readCreateProcessLazy
  :: (ProcessResult a b, ListLikeProcessIO a c) => CreateProcess -> a -> IO b
