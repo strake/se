@@ -20,14 +20,15 @@ source-repository head
   location:            https://github.com/strake/se.git
 
 common c
-  build-depends:       array ^>= 0.5.4.0
+  build-depends:       ListLike == 4.6.2
+                     , array ^>= 0.5.4.0
                      , base ^>= 4.14.0.0
-                     , category
-                     , containers
-                     , hs-functors
+                     , filtrable ^>= 0.1.5.0
                      , regex-base ^>= 0.94
                      , regex-tdfa ^>= 1.3.1.1
                      , process ^>= 1.6.9.0
+                     , process-extras ^>= 0.7.4
+                     , text ^>= 1.2.3
                      , transformers ^>= 0.5.6.2
                      , ucd ^>= 0.0
                      , util ^>= 0.1.17
@@ -70,6 +71,13 @@ library
   hs-source-dirs:      src
   exposed-modules:
     Lib
+  build-depends:       process-x
+
+library process-x
+  import:              c
+  hs-source-dirs:      src-process-x
+  exposed-modules:
+    Process
 
 test-suite test
   import:              c
