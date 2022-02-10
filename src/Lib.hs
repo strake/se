@@ -3,8 +3,9 @@
 
 module Lib (Program (..), doProgram) where
 
+import Control.Applicative (liftA2)
 import Control.Exception (throwIO)
-import Control.Monad ((>=>))
+import Control.Monad ((>=>), join)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.State (StateT (..))
@@ -15,8 +16,10 @@ import qualified Data.ByteString.Lazy.Char8 as BS (putStrLn)
 import qualified Data.ByteString.Lazy.UTF8 as BS
 import Data.Char (isAlphaNum, isSpace)
 import qualified Data.Char.Properties.BidiBrackets as UC
+import Data.Function (on)
 import Data.Ix (Ix)
-import Data.Maybe (listToMaybe)
+import qualified Data.IntMap as IntMap
+import Data.Maybe (fromMaybe, listToMaybe)
 import Lens.Micro (set)
 import System.Exit (ExitCode (..))
 import Text.Regex.Base (makeRegexOptsM)
@@ -36,6 +39,9 @@ doProgram = fmap (\ f -> fmap unPosited . f . Posited 0) . go . programSource
     go :: MonadFail m => [Char] -> m (Posited ByteString -> IO (Posited ByteString))
     go = dropWhile isSpace & \ case
         [] -> pure pure
+        'l':pxs@(d:_) | Nothing <- UC.paired d ->
+          [ traverse $ pure . (on tr parseTrSeq) s t
+          | ((s, t), _) <- runStateT ((join . liftA2) (,) $ parseDelimitedHelper d d) pxs ]
         'p':pxs -> (\ k xs -> liftIO (BS.putStrLn (unPosited xs)) *> k xs) <$> go pxs
         's':pxs@(d:_) | Nothing <- UC.paired d ->
           [ withResetPos go
@@ -67,6 +73,17 @@ doProgram = fmap (\ f -> fmap unPosited . f . Posited 0) . go . programSource
             (ExitSuccess, xs, _ :: ByteString) -> pure xs
             (e, _, _) -> throwIO e
         pxs -> fail ("Failed to parse program: " ++ show pxs)
+
+tr :: [Char] -> [Char] -> ByteString -> ByteString
+tr s t = BS.fromString . fmap (fromMaybe <*> flip IntMap.lookup r . fromEnum) . BS.toString
+  where
+    r = IntMap.fromList (zip (fromEnum <$> s) t)
+
+parseTrSeq :: [Char] -> [Char]
+parseTrSeq = \ case
+    [] -> []
+    x:'-':y:xs -> [x..y] ++ parseTrSeq xs
+    x:xs -> x:parseTrSeq xs
 
 withResetPos :: Functor f => (Posited a -> f (Posited a)) -> Posited a -> f (Posited a)
 withResetPos f (Posited k a) = set posL k <$> f (Posited 0 a)
