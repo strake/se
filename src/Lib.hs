@@ -17,6 +17,7 @@ import Data.Maybe (listToMaybe)
 import Data.Text.Lazy (Text)
 import qualified Data.Text.Lazy as Text
 import qualified Data.Text.Lazy.IO as Text
+import Lens.Micro (set)
 import System.Exit (ExitCode (..))
 import Text.Regex.Base (makeRegexOptsM)
 import qualified Text.Regex.Base as Regex
@@ -27,35 +28,48 @@ import Util
 import Process (readCreateProcessLazy, shell)
 import qualified Process
 
+import Posited
+
 doProgram :: MonadFail m => Program -> m (Text -> IO Text)
-doProgram = go . programSource
+doProgram = fmap (\ f -> fmap unPosited . f . Posited 0) . go . programSource
   where
-    go :: MonadFail m => [Char] -> m (Text -> IO Text)
+    go :: MonadFail m => [Char] -> m (Posited Text -> IO (Posited Text))
     go = dropWhile isSpace & \ case
         [] -> pure pure
-        'p':pxs -> (\ k xs -> liftIO (Text.putStrLn xs) *> k xs) <$> go pxs
+        'p':pxs -> (\ k xs -> liftIO (Text.putStrLn (unPosited xs)) *> k xs) <$> go pxs
         's':pxs@(d:_) | Nothing <- UC.paired d ->
-          [ go
+          [ withResetPos go
           | ((re, ψ), _flags) <- runStateT ((,) <$> parseDelimitedRegex <*> parsePostdelimitedSubst d) pxs
           , let go xs
-                  | Just (xs, ms, zs) <- Regex.matchOnceText re xs =
-                        [xs <> ys' <> zs' | ys' <- ψ (fst <$> ms), zs' <- go zs]
+                  | Just (Posited k xs, ms, zs) <- Regex.matchOnceText re xs =
+                        [Posited k (xs <> ys' <> zs') | ys' <- ψ (unPosited . fst <$> ms), Posited _ zs' <- go zs]
                   | otherwise = pure xs ]
         'x':pxs ->
-          [ go
+          [ withResetPos go
           | (re, pxs) <- parseDelimitedRegex `runStateT` pxs
           , kont <- go pxs
           , let go xs
                   | Just (xs, ms, zs) <- Regex.matchOnceText re xs, (0, (ys, _)):_ <- Array.assocs ms =
-                        [xs <> ys' <> zs' | ys' <- kont ys, zs' <- go zs]
+                        [xs <> ys' <> zs' | ys' <- withResetPos kont ys, zs' <- go zs]
                   | otherwise = pure xs ]
-        '|':pxs -> pure $ readCreateProcessLazy (shell pxs)
+        'y':pxs ->
+          [ withResetPos go
+          | (re, pxs) <- parseDelimitedRegex `runStateT` pxs
+          , kont <- go pxs
+          , let go xs
+                  | Just (xs, ms, zs) <- Regex.matchOnceText re xs, (0, (ys, _)):_ <- Array.assocs ms =
+                        [xs' <> ys <> zs' | xs' <- withResetPos kont xs, zs' <- go zs]
+                  | otherwise = kont xs ]
+        '|':pxs -> pure $ traverse $ readCreateProcessLazy (shell pxs)
             { Process.std_in = Process.CreatePipe
             , Process.std_out = Process.CreatePipe
             , Process.std_err = Process.Inherit } >=> \ case
             (ExitSuccess, xs, _ :: Text) -> pure xs
             (e, _, _) -> throwIO e
         pxs -> fail ("Failed to parse program: " ++ show pxs)
+
+withResetPos :: Functor f => (Posited a -> f (Posited a)) -> Posited a -> f (Posited a)
+withResetPos f (Posited k a) = set posL k <$> f (Posited 0 a)
 
 parseDelimitedRegex :: MonadFail m => StateT [Char] m Regex
 parseDelimitedRegex = do
