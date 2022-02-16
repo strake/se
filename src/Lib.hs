@@ -3,19 +3,21 @@
 
 module Lib (Program (..), doProgram) where
 
-import Control.Applicative (liftA2)
+import Control.Applicative (Alternative (..), liftA2)
 import Control.Exception (throwIO)
-import Control.Monad ((>=>), join)
+import Control.Monad (MonadPlus (..), (>=>), join)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
-import Control.Monad.Trans.State (StateT (..))
+import Control.Monad.Trans.State (StateT (..), modify)
 import Data.Array (Array)
 import qualified Data.Array as Array
 import Data.ByteString.Lazy (ByteString)
 import qualified Data.ByteString.Lazy.Char8 as BS (putStrLn)
 import qualified Data.ByteString.Lazy.UTF8 as BS
-import Data.Char (isAlphaNum, isSpace)
+import Data.Char (isAlpha, isSpace)
 import qualified Data.Char.Properties.BidiBrackets as UC
+import Data.Filtrable (spanJust)
+import Data.Foldable (foldl')
 import Data.Function (on)
 import Data.Ix (Ix)
 import qualified Data.IntMap as IntMap
@@ -116,9 +118,31 @@ parsePostdelimitedSubst d = flip f <$> parseDelimitedHelper d d
         go = \ case
             [] -> pure ""
             '\\':xs
-              | (n, xs):_ <- reads xs, Just ys <- yss !? n -> (ys <>) <$> go xs
+              | Just (ys, xs) <-
+                [ (ys, xs)
+                | (n, xs) <- runStateT parseOptionallyBracketedNatural xs
+                , ys <- yss !? n ] -> (ys <>) <$> go xs
               | otherwise -> fail ("Invalid backreference: " ++ show xs)
             x:xs -> (BS.fromString [x] <>) <$> go xs
+
+parseNatural :: (Alternative f, Num b) => StateT [Char] f b
+parseNatural = StateT $
+    dropWhile isSpace & spanJust digit & \ case
+        ([], _) -> empty
+        (ys, xs) -> pure (fromDigits 10 ys, xs)
+
+parseOptionallyBracketedNatural :: (MonadPlus f, Num b) => StateT [Char] f b
+parseOptionallyBracketedNatural = StateT \ case
+    '{':xs -> flip runStateT xs do
+        n <- parseNatural
+        modify (dropWhile isSpace)
+        StateT \ case
+            '}':xs -> pure (n, xs)
+            _ -> empty
+    xs -> runStateT parseNatural xs
+
+fromDigits :: (Integral a, Num b) => Word -> [a] -> b
+fromDigits r = foldl' (\ n w -> fromIntegral r*n + fromIntegral w) 0
 
 parseDelimitedHelper :: MonadFail m => Char -> Char -> StateT [Char] m [Char]
 parseDelimitedHelper dl dr = StateT (go "")
@@ -128,9 +152,16 @@ parseDelimitedHelper dl dr = StateT (go "")
     go acc (x:xs)
       | dr == x = pure (acc, xs)
       | dl == x = fail ("Invalid character in regex: " ++ show x)
-    go acc ('\\':x:xs)
-      | False <- isAlphaNum x = go (acc ++ [x]) xs
+    go acc ('\\':xs'@(x:xs))
+      | not (isAlpha x) = go (acc ++ [x]) xs
+      | isAlpha x = runStateT (pure <$> parseEscapeSeq) xs'
+    go acc ('\\':[]) = fail "Invalid escape sequence: <empty>"
     go acc (x:xs) = go (acc ++ [x]) xs
+
+parseEscapeSeq :: MonadFail m => StateT [Char] m Char
+parseEscapeSeq = StateT \ case
+    -- We not yet recognize any escape sequences.
+    xs -> fail ("Invalid escape sequence: " ++ xs)
 
 newtype Program = Program { programSource :: [Char] }
 
