@@ -17,12 +17,13 @@ import qualified Data.ByteString.Lazy.Char8 as BS (putStrLn)
 import qualified Data.ByteString.Lazy.UTF8 as BS
 import Data.Char (isAlpha, isSpace)
 import qualified Data.Char.Properties.BidiBrackets as UC
-import Data.Filtrable (spanJust)
+import Data.Filtrable (mapMaybeA, spanJust)
 import Data.Foldable (foldl')
 import Data.Function (on)
 import Data.Ix (Ix)
 import qualified Data.IntMap as IntMap
 import Data.Maybe (fromMaybe, listToMaybe)
+import qualified Data.Set as Set
 import Lens.Micro (set)
 import System.Exit (ExitCode (..))
 import Text.Regex.Base (makeRegexOptsM)
@@ -48,10 +49,16 @@ doProgram = fmap (\ f -> fmap unPosited . f . Posited 0) . go . programSource
         'p':pxs -> (\ k xs -> liftIO (BS.putStrLn (unPosited xs)) *> k xs) <$> go pxs
         's':pxs@(d:_) | Nothing <- UC.paired d ->
           [ withResetPos go
-          | ((re, ψ), _flags) <- runStateT ((,) <$> parseDelimitedRegex <*> parsePostdelimitedSubst d) pxs
+          | ((re, ψ), flagXs) <- runStateT ((,) <$> parseDelimitedRegex <*> parsePostdelimitedSubst d) pxs
+          , flags <- Set.fromList <$> flip mapMaybeA flagXs \ case
+                '1' -> pure (Just SFlagOnce)
+                x | isSpace x -> pure Nothing
+                  | otherwise -> fail ("Invalid flag: " ++ show x)
           , let go xs
                   | Just (Posited k xs, ms, zs) <- Regex.matchOnceText re xs =
-                        [Posited k (xs <> ys' <> zs') | ys' <- ψ (unPosited . fst <$> ms), Posited _ zs' <- go zs]
+                      [ Posited k (xs <> ys' <> zs')
+                      | ys' <- ψ (unPosited . fst <$> ms)
+                      , Posited _ zs' <- bool go pure (elem SFlagOnce flags) zs ]
                   | otherwise = pure xs ]
         'u':pxs -> helperReK pxs \ re kont -> bool pure kont =<< Regex.matchTest re
         'v':pxs -> helperReK pxs \ re kont -> bool kont pure =<< Regex.matchTest re
@@ -79,6 +86,10 @@ doProgram = fmap (\ f -> fmap unPosited . f . Posited 0) . go . programSource
       [ withResetPos $ f re kont
       | (re, pxs) <- parseDelimitedRegex `runStateT` pxs
       , kont <- go pxs ]
+
+data SFlag
+  = SFlagOnce
+  deriving (Eq, Ord)
 
 tr :: [Char] -> [Char] -> ByteString -> ByteString
 tr s t = BS.fromString . fmap (fromMaybe <*> flip IntMap.lookup r . fromEnum) . BS.toString
