@@ -11,6 +11,7 @@ import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.State (StateT (..), modify)
 import Data.Array (Array)
 import qualified Data.Array as Array
+import Data.Bool (bool)
 import Data.ByteString.Lazy (ByteString)
 import qualified Data.ByteString.Lazy.Char8 as BS (putStrLn)
 import qualified Data.ByteString.Lazy.UTF8 as BS
@@ -52,22 +53,20 @@ doProgram = fmap (\ f -> fmap unPosited . f . Posited 0) . go . programSource
                   | Just (Posited k xs, ms, zs) <- Regex.matchOnceText re xs =
                         [Posited k (xs <> ys' <> zs') | ys' <- ψ (unPosited . fst <$> ms), Posited _ zs' <- go zs]
                   | otherwise = pure xs ]
-        'x':pxs ->
-          [ withResetPos go
-          | (re, pxs) <- parseDelimitedRegex `runStateT` pxs
-          , kont <- go pxs
-          , let go xs
+        'u':pxs -> helperReK pxs \ re kont -> bool pure kont =<< Regex.matchTest re
+        'v':pxs -> helperReK pxs \ re kont -> bool kont pure =<< Regex.matchTest re
+        'x':pxs -> helperReK pxs \ re kont ->
+            let go xs
                   | Just (xs, ms, zs) <- Regex.matchOnceText re xs, (0, (ys, _)):_ <- Array.assocs ms =
                         [xs <> ys' <> zs' | ys' <- withResetPos kont ys, zs' <- go zs]
-                  | otherwise = pure xs ]
-        'y':pxs ->
-          [ withResetPos go
-          | (re, pxs) <- parseDelimitedRegex `runStateT` pxs
-          , kont <- go pxs
-          , let go xs
+                  | otherwise = pure xs
+            in go
+        'y':pxs -> helperReK pxs \ re kont ->
+            let go xs
                   | Just (xs, ms, zs) <- Regex.matchOnceText re xs, (0, (ys, _)):_ <- Array.assocs ms =
                         [xs' <> ys <> zs' | xs' <- withResetPos kont xs, zs' <- go zs]
-                  | otherwise = kont xs ]
+                  | otherwise = kont xs
+            in go
         '|':pxs -> pure $ traverse $ readCreateProcessLazy (shell pxs)
             { Process.std_in = Process.CreatePipe
             , Process.std_out = Process.CreatePipe
@@ -75,6 +74,11 @@ doProgram = fmap (\ f -> fmap unPosited . f . Posited 0) . go . programSource
             (ExitSuccess, xs, _ :: ByteString) -> pure xs
             (e, _, _) -> throwIO e
         pxs -> fail ("Failed to parse program: " ++ show pxs)
+
+    helperReK pxs f =
+      [ withResetPos $ f re kont
+      | (re, pxs) <- parseDelimitedRegex `runStateT` pxs
+      , kont <- go pxs ]
 
 tr :: [Char] -> [Char] -> ByteString -> ByteString
 tr s t = BS.fromString . fmap (fromMaybe <*> flip IntMap.lookup r . fromEnum) . BS.toString
